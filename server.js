@@ -1,103 +1,144 @@
-require("dotenv").config();
 const express = require("express");
+const cors = require("cors");
+const mysql = require("mysql2");
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
-const cors = require("cors");
-app.use(cors());
-const { Pool } = require("pg");
 const nodemailer = require("nodemailer");
+require("dotenv").config();
 
 const app = express();
-app.use(cors());
 app.use(express.json());
 
-// PostgreSQL Connection
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: { rejectUnauthorized: false }
+// ✅ CORS Configuration (Allow requests from frontend)
+const corsOptions = {
+  origin: "*", // Change to your frontend URL if needed
+  methods: "GET, POST, PUT, DELETE",
+  credentials: true,
+};
+app.use(cors(corsOptions));
+
+// ✅ Database Connection (Replace with your database details)
+const db = mysql.createConnection({
+  host: "your-database-host",
+  user: "your-database-username",
+  password: "your-database-password",
+  database: "your-database-name",
 });
 
-// Signup
-app.post("/api/signup", async (req, res) => {
-  const { email, password } = req.body;
-  if (!email.includes("@")) return res.status(400).json({ message: "Invalid email" });
-
-  const hashedPassword = await bcrypt.hash(password, 10);
-  try {
-    const result = await pool.query("INSERT INTO users (email, password) VALUES ($1, $2) RETURNING id", [email, hashedPassword]);
-    res.json({ success: true, userId: result.rows[0].id });
-  } catch (err) {
-    res.status(500).json({ message: "Error: Email already registered" });
+db.connect((err) => {
+  if (err) {
+    console.error("Database connection failed:", err);
+  } else {
+    console.log("Connected to MySQL database");
   }
 });
 
-// Login
-app.post("/api/login", async (req, res) => {
+// ✅ JWT Secret Key
+const JWT_SECRET = "your_secret_key";
+
+// 📌 **User Signup API**
+app.post("/signup", async (req, res) => {
   const { email, password } = req.body;
-  const user = await pool.query("SELECT * FROM users WHERE email = $1", [email]);
+  const hashedPassword = await bcrypt.hash(password, 10);
 
-  if (user.rows.length === 0) return res.status(404).json({ message: "User not found" });
-
-  const match = await bcrypt.compare(password, user.rows[0].password);
-  if (!match) return res.status(401).json({ message: "Wrong password" });
-
-  const token = jwt.sign({ id: user.rows[0].id, email: user.rows[0].email }, process.env.JWT_SECRET, { expiresIn: "7d" });
-  res.json({ success: true, token });
+  db.query(
+    "INSERT INTO users (email, password) VALUES (?, ?)",
+    [email, hashedPassword],
+    (err, result) => {
+      if (err) return res.status(400).json({ error: "User already exists" });
+      res.status(201).json({ message: "User created successfully" });
+    }
+  );
 });
 
-// Forgot Password (Send Email)
-app.post("/api/forgot-password", async (req, res) => {
-  const { email } = req.body;
-  const token = jwt.sign({ email }, process.env.JWT_SECRET, { expiresIn: "15m" });
+// 📌 **User Login API**
+app.post("/login", (req, res) => {
+  const { email, password } = req.body;
 
-  await pool.query("UPDATE users SET reset_token = $1 WHERE email = $2", [token, email]);
+  db.query("SELECT * FROM users WHERE email = ?", [email], async (err, results) => {
+    if (err || results.length === 0) return res.status(400).json({ error: "User not found" });
 
-  const transporter = nodemailer.createTransport({
-    service: "gmail",
-    auth: { user: process.env.EMAIL, pass: process.env.EMAIL_PASS }
+    const user = results[0];
+    const isMatch = await bcrypt.compare(password, user.password);
+    if (!isMatch) return res.status(401).json({ error: "Invalid credentials" });
+
+    const token = jwt.sign({ email: user.email }, JWT_SECRET, { expiresIn: "1h" });
+    res.json({ message: "Login successful", token, email: user.email });
   });
+});
+
+// 📌 **Store MCQ Scores API**
+app.post("/save-score", (req, res) => {
+  const { email, subject, chapter, level, score } = req.body;
+
+  db.query(
+    "INSERT INTO scores (email, subject, chapter, level, score) VALUES (?, ?, ?, ?, ?)",
+    [email, subject, chapter, level, score],
+    (err, result) => {
+      if (err) return res.status(500).json({ error: "Database error" });
+      res.json({ message: "Score saved successfully" });
+    }
+  );
+});
+
+// 📌 **Retrieve Score History API**
+app.get("/get-scores/:email", (req, res) => {
+  const email = req.params.email;
+
+  db.query("SELECT * FROM scores WHERE email = ?", [email], (err, results) => {
+    if (err) return res.status(500).json({ error: "Database error" });
+    res.json(results);
+  });
+});
+
+// 📌 **Forgot Password API (Send Reset Email)**
+const transporter = nodemailer.createTransport({
+  service: "gmail",
+  auth: {
+    user: "your-email@gmail.com",
+    pass: "your-email-password",
+  },
+});
+
+app.post("/forgot-password", (req, res) => {
+  const { email } = req.body;
+  const token = jwt.sign({ email }, JWT_SECRET, { expiresIn: "15m" });
+
+  const resetLink = `https://your-frontend-url/reset-password.html?token=${token}`;
 
   const mailOptions = {
-    from: process.env.EMAIL,
+    from: "your-email@gmail.com",
     to: email,
-    subject: "Reset Password",
-    html: `<p>Click <a href="${process.env.FRONTEND_URL}/reset-password?token=${token}">here</a> to reset your password.</p>`
+    subject: "Password Reset",
+    text: `Click this link to reset your password: ${resetLink}`,
   };
 
   transporter.sendMail(mailOptions, (err, info) => {
-    if (err) return res.status(500).json({ message: "Email send failed" });
-    res.json({ success: true, message: "Check your email for reset link" });
+    if (err) return res.status(500).json({ error: "Email not sent" });
+    res.json({ message: "Password reset email sent" });
   });
 });
 
-// Reset Password
-app.post("/api/reset-password", async (req, res) => {
+// 📌 **Reset Password API**
+app.post("/reset-password", async (req, res) => {
   const { token, newPassword } = req.body;
 
   try {
-    const { email } = jwt.verify(token, process.env.JWT_SECRET);
+    const decoded = jwt.verify(token, JWT_SECRET);
     const hashedPassword = await bcrypt.hash(newPassword, 10);
-    await pool.query("UPDATE users SET password = $1, reset_token = NULL WHERE email = $2", [hashedPassword, email]);
-    res.json({ success: true, message: "Password updated" });
-  } catch {
-    res.status(400).json({ message: "Invalid or expired token" });
+
+    db.query("UPDATE users SET password = ? WHERE email = ?", [hashedPassword, decoded.email], (err) => {
+      if (err) return res.status(500).json({ error: "Database error" });
+      res.json({ message: "Password updated successfully" });
+    });
+  } catch (error) {
+    res.status(400).json({ error: "Invalid or expired token" });
   }
 });
 
-// Save Score
-app.post("/api/save-score", async (req, res) => {
-  const { userId, subject, chapter, level, score, total } = req.body;
-  await pool.query("INSERT INTO scores (user_id, subject, chapter, level, score, total) VALUES ($1, $2, $3, $4, $5, $6)", 
-    [userId, subject, chapter, level, score, total]);
-  res.json({ success: true });
+// ✅ **Run Server on Vercel**
+app.listen(3000, () => {
+  console.log("Server running on port 3000");
 });
 
-// Get Score History
-app.get("/api/score-history", async (req, res) => {
-  const { userId } = req.query;
-  const results = await pool.query("SELECT * FROM scores WHERE user_id = $1", [userId]);
-  res.json(results.rows);
-});
-
-// Start Server
-app.listen(3000, () => console.log("✅ Server running on port 3000"));
+module.exports = app; // Required for Vercel deployment
