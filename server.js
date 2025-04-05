@@ -1,144 +1,106 @@
 const express = require("express");
 const cors = require("cors");
-const mysql = require("mysql2");
-const bcrypt = require("bcrypt");
+const bodyParser = require("body-parser");
+const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
-const nodemailer = require("nodemailer");
-require("dotenv").config();
+const sqlite3 = require("sqlite3").verbose();
 
 const app = express();
-app.use(express.json());
+const PORT = process.env.PORT || 3000;
+const SECRET_KEY = "your_secret_key"; // Change this to a secure secret key
 
-// ✅ CORS Configuration (Allow requests from frontend)
+// 📌 CORS Configuration
 const corsOptions = {
-  origin: "*", // Change to your frontend URL if needed
+  origin: "*",  // 🔹 Allow any frontend (change "*" to your frontend URL if needed)
   methods: "GET, POST, PUT, DELETE",
+  allowedHeaders: "Content-Type, Authorization",
   credentials: true,
 };
 app.use(cors(corsOptions));
+app.use(bodyParser.json());
 
-// ✅ Database Connection (Replace with your database details)
-const db = mysql.createConnection({
-  host: "your-database-host",
-  user: "your-database-username",
-  password: "your-database-password",
-  database: "your-database-name",
-});
-
-db.connect((err) => {
+// 📌 Database Setup (SQLite for simplicity)
+const db = new sqlite3.Database("./users.db", (err) => {
   if (err) {
-    console.error("Database connection failed:", err);
+    console.error("Database connection failed:", err.message);
   } else {
-    console.log("Connected to MySQL database");
+    console.log("Connected to SQLite database.");
+    db.run(`
+      CREATE TABLE IF NOT EXISTS users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        email TEXT UNIQUE NOT NULL,
+        password TEXT NOT NULL
+      )
+    `);
+    db.run(`
+      CREATE TABLE IF NOT EXISTS scores (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER,
+        score INTEGER,
+        timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(user_id) REFERENCES users(id)
+      )
+    `);
   }
 });
 
-// ✅ JWT Secret Key
-const JWT_SECRET = "your_secret_key";
-
-// 📌 **User Signup API**
-app.post("/signup", async (req, res) => {
+// 📌 Signup Route
+app.post("/signup", (req, res) => {
   const { email, password } = req.body;
-  const hashedPassword = await bcrypt.hash(password, 10);
+  if (!email || !password) return res.status(400).json({ error: "Missing email or password" });
 
-  db.query(
-    "INSERT INTO users (email, password) VALUES (?, ?)",
-    [email, hashedPassword],
-    (err, result) => {
-      if (err) return res.status(400).json({ error: "User already exists" });
-      res.status(201).json({ message: "User created successfully" });
-    }
-  );
+  const hashedPassword = bcrypt.hashSync(password, 10);
+  db.run("INSERT INTO users (email, password) VALUES (?, ?)", [email, hashedPassword], function (err) {
+    if (err) return res.status(400).json({ error: "Email already exists" });
+    res.json({ message: "User registered successfully", userId: this.lastID });
+  });
 });
 
-// 📌 **User Login API**
+// 📌 Login Route
 app.post("/login", (req, res) => {
   const { email, password } = req.body;
+  if (!email || !password) return res.status(400).json({ error: "Missing email or password" });
 
-  db.query("SELECT * FROM users WHERE email = ?", [email], async (err, results) => {
-    if (err || results.length === 0) return res.status(400).json({ error: "User not found" });
+  db.get("SELECT * FROM users WHERE email = ?", [email], (err, user) => {
+    if (err || !user) return res.status(400).json({ error: "Invalid email or password" });
 
-    const user = results[0];
-    const isMatch = await bcrypt.compare(password, user.password);
-    if (!isMatch) return res.status(401).json({ error: "Invalid credentials" });
+    if (!bcrypt.compareSync(password, user.password)) return res.status(400).json({ error: "Invalid password" });
 
-    const token = jwt.sign({ email: user.email }, JWT_SECRET, { expiresIn: "1h" });
-    res.json({ message: "Login successful", token, email: user.email });
+    const token = jwt.sign({ id: user.id, email: user.email }, SECRET_KEY, { expiresIn: "1h" });
+    res.json({ message: "Login successful", token });
   });
 });
 
-// 📌 **Store MCQ Scores API**
-app.post("/save-score", (req, res) => {
-  const { email, subject, chapter, level, score } = req.body;
+// 📌 Score Submission Route
+app.post("/submit-score", (req, res) => {
+  const { userId, score } = req.body;
+  if (!userId || score == null) return res.status(400).json({ error: "Missing data" });
 
-  db.query(
-    "INSERT INTO scores (email, subject, chapter, level, score) VALUES (?, ?, ?, ?, ?)",
-    [email, subject, chapter, level, score],
-    (err, result) => {
-      if (err) return res.status(500).json({ error: "Database error" });
-      res.json({ message: "Score saved successfully" });
-    }
-  );
-});
-
-// 📌 **Retrieve Score History API**
-app.get("/get-scores/:email", (req, res) => {
-  const email = req.params.email;
-
-  db.query("SELECT * FROM scores WHERE email = ?", [email], (err, results) => {
-    if (err) return res.status(500).json({ error: "Database error" });
-    res.json(results);
+  db.run("INSERT INTO scores (user_id, score) VALUES (?, ?)", [userId, score], function (err) {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json({ message: "Score saved successfully" });
   });
 });
 
-// 📌 **Forgot Password API (Send Reset Email)**
-const transporter = nodemailer.createTransport({
-  service: "gmail",
-  auth: {
-    user: "your-email@gmail.com",
-    pass: "your-email-password",
-  },
+// 📌 Fetch Score History
+app.get("/score-history/:userId", (req, res) => {
+  const userId = req.params.userId;
+  db.all("SELECT * FROM scores WHERE user_id = ? ORDER BY timestamp DESC", [userId], (err, rows) => {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json(rows);
+  });
 });
 
+// 📌 Forgot Password (Dummy Endpoint)
 app.post("/forgot-password", (req, res) => {
   const { email } = req.body;
-  const token = jwt.sign({ email }, JWT_SECRET, { expiresIn: "15m" });
+  if (!email) return res.status(400).json({ error: "Email required" });
 
-  const resetLink = `https://your-frontend-url/reset-password.html?token=${token}`;
-
-  const mailOptions = {
-    from: "your-email@gmail.com",
-    to: email,
-    subject: "Password Reset",
-    text: `Click this link to reset your password: ${resetLink}`,
-  };
-
-  transporter.sendMail(mailOptions, (err, info) => {
-    if (err) return res.status(500).json({ error: "Email not sent" });
-    res.json({ message: "Password reset email sent" });
-  });
+  // 🔹 Normally, send an email with a reset link
+  res.json({ message: "Password reset link sent to email (dummy response)" });
 });
 
-// 📌 **Reset Password API**
-app.post("/reset-password", async (req, res) => {
-  const { token, newPassword } = req.body;
-
-  try {
-    const decoded = jwt.verify(token, JWT_SECRET);
-    const hashedPassword = await bcrypt.hash(newPassword, 10);
-
-    db.query("UPDATE users SET password = ? WHERE email = ?", [hashedPassword, decoded.email], (err) => {
-      if (err) return res.status(500).json({ error: "Database error" });
-      res.json({ message: "Password updated successfully" });
-    });
-  } catch (error) {
-    res.status(400).json({ error: "Invalid or expired token" });
-  }
-});
-
-// ✅ **Run Server on Vercel**
-app.listen(3000, () => {
-  console.log("Server running on port 3000");
-});
+// 📌 Server Start
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
 
 module.exports = app; // Required for Vercel deployment
