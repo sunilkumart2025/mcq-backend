@@ -7,7 +7,7 @@ const sqlite3 = require("sqlite3").verbose();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const SECRET_KEY = "your_secret_key"; // Change this to a secure secret key
+const SECRET_KEY = "0uM5OlGVHtRh5WFTse0PRvJwidvTnkoMg9Uh0G1F2HNcqhvS2RL8pEOTJkwQ8nP3vw/qSgWA6UrGelQt0HlKzw=="; // Change this to a secure secret key
 
 // 📌 CORS Configuration
 const corsOptions = {
