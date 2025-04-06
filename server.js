@@ -1,91 +1,76 @@
+// server.js
+
 const express = require("express");
-const app = express();
-app.use(express.json()); // 👈 necessary to parse JSON body
-const express = require('express');
-const cors = require('cors');
-const mysql = require('mysql2');
-const bodyParser = require('body-parser');
-const dotenv = require('dotenv');
-dotenv.config();
+const cors = require("cors");
+const bcrypt = require("bcrypt");
+const { Pool } = require("pg");
+require("dotenv").config();
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+app.use(express.json());
 
-// ✅ Allow only your frontend domain
-app.use(cors({
-  origin: 'https://srm-gamma.vercel.app',
-  methods: ['GET', 'POST', 'PUT', 'DELETE'],
-  credentials: true
-}));
+// CORS config for GitHub Pages frontend
+app.use(
+  cors({
+    origin: "https://srm-gamma.vercel.app", // ✅ your frontend URL here
+    methods: ["GET", "POST", "PUT", "DELETE"],
+    credentials: true,
+  })
+);
 
-app.use(bodyParser.json());
-
-// ✅ MySQL (or Supabase SQL connection settings)
-const db = mysql.createConnection({
-  host: process.env.DB_HOST,       // e.g., 'db.supabase.com'
-  user: process.env.DB_USER,       // your username
-  password: process.env.DB_PASS,   // your password
-  database: process.env.DB_NAME    // your database name
+// PostgreSQL config for Supabase
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: {
+    rejectUnauthorized: false, // Important for Supabase
+  },
 });
 
-db.connect(err => {
-  if (err) {
-    console.error('Database connection failed:', err);
-  } else {
-    console.log('Connected to database');
-  }
+// Basic root route
+app.get("/", (req, res) => {
+  res.status(200).send("✅ MCQ Backend is running");
 });
 
-// ✅ Signup route
+// Signup Route
 app.post("/signup", async (req, res) => {
-  const { name, email, password } = req.body;
   try {
+    const { name, email, password } = req.body;
+
     if (!name || !email || !password) {
       return res.status(400).json({ message: "All fields are required." });
     }
 
-    // Check if user exists
-    const existingUser = await pool.query("SELECT * FROM users WHERE email = $1", [email]);
-    if (existingUser.rows.length > 0) {
-      return res.status(409).json({ message: "Email already registered" });
+    // Check if user already exists
+    const result = await pool.query("SELECT * FROM users WHERE email = $1", [email]);
+    if (result.rows.length > 0) {
+      return res.status(409).json({ message: "Email already registered." });
     }
 
-    // Hash password and insert user
     const hashedPassword = await bcrypt.hash(password, 10);
-    await pool.query(
-      "INSERT INTO users (name, email, password) VALUES ($1, $2, $3)",
-      [name, email, hashedPassword]
-    );
+    await pool.query("INSERT INTO users (name, email, password) VALUES ($1, $2, $3)", [
+      name,
+      email,
+      hashedPassword,
+    ]);
 
-    res.status(201).json({ message: "User registered successfully" });
-  } catch (error) {
-    console.error("🔥 Signup Error:", error); // 👈 This will show up in Vercel logs
-    res.status(500).json({ message: "Internal Server Error" });
+    res.status(201).json({ message: "Signup successful." });
+  } catch (err) {
+    console.error("🔥 Signup error:", err);
+    res.status(500).json({ message: "Internal server error." });
   }
 });
 
+// Fallback route
+app.use((req, res) => {
+  res.status(404).json({ message: "Route not found." });
+});
 
-// ✅ Login route
-app.post('/login', (req, res) => {
-  const { email, password } = req.body;
-  const query = 'SELECT * FROM users WHERE email = ? AND password = ?';
-  db.query(query, [email, password], (err, results) => {
-    if (err || results.length === 0) {
-      return res.status(401).json({ message: 'Invalid credentials' });
-    }
-    res.json({ message: 'Login successful', data: true });
+// Start server (needed only for local dev, not on Vercel)
+if (process.env.NODE_ENV !== "production") {
+  const PORT = process.env.PORT || 3000;
+  app.listen(PORT, () => {
+    console.log(`🚀 Server running on http://localhost:${PORT}`);
   });
-});
+}
 
-// ✅ Forgot password route (basic simulation)
-app.post('/forgot-password', (req, res) => {
-  const { email } = req.body;
-  if (!email) return res.status(400).json({ message: 'Email required' });
-
-  // TODO: Send an email with reset link (use nodemailer later)
-  res.json({ message: 'Reset email sent (simulated)', data: true });
-});
-
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-});
+module.exports = app;
