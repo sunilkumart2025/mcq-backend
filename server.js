@@ -1,3 +1,6 @@
+const express = require("express");
+const app = express();
+app.use(express.json()); // 👈 necessary to parse JSON body
 const express = require('express');
 const cors = require('cors');
 const mysql = require('mysql2');
@@ -34,21 +37,33 @@ db.connect(err => {
 });
 
 // ✅ Signup route
-app.post('/signup', (req, res) => {
-  const { email, password } = req.body;
-  if (!email || !password) return res.status(400).json({ message: 'Missing fields' });
-
-  const query = 'INSERT INTO users (email, password) VALUES (?, ?)';
-  db.query(query, [email, password], (err) => {
-    if (err) {
-      if (err.code === 'ER_DUP_ENTRY') {
-        return res.status(400).json({ message: 'Email already exists' });
-      }
-      return res.status(500).json({ message: 'Signup failed' });
+app.post("/signup", async (req, res) => {
+  const { name, email, password } = req.body;
+  try {
+    if (!name || !email || !password) {
+      return res.status(400).json({ message: "All fields are required." });
     }
-    res.json({ message: 'Signup successful', data: true });
-  });
+
+    // Check if user exists
+    const existingUser = await pool.query("SELECT * FROM users WHERE email = $1", [email]);
+    if (existingUser.rows.length > 0) {
+      return res.status(409).json({ message: "Email already registered" });
+    }
+
+    // Hash password and insert user
+    const hashedPassword = await bcrypt.hash(password, 10);
+    await pool.query(
+      "INSERT INTO users (name, email, password) VALUES ($1, $2, $3)",
+      [name, email, hashedPassword]
+    );
+
+    res.status(201).json({ message: "User registered successfully" });
+  } catch (error) {
+    console.error("🔥 Signup Error:", error); // 👈 This will show up in Vercel logs
+    res.status(500).json({ message: "Internal Server Error" });
+  }
 });
+
 
 // ✅ Login route
 app.post('/login', (req, res) => {
