@@ -1,18 +1,44 @@
-require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
-const app = express();
-const authRoutes = require('./routes/auth');
-const scoreRoutes = require('./routes/scores');
+const dotenv = require('dotenv');
+const mysql = require('mysql2');
 
-app.use(cors({
-  origin: 'https://srm-gamma.vercel.app', // your frontend domain
-  credentials: true
-}));
+dotenv.config();
+
+const app = express();
+const port = process.env.PORT || 3000;
+
+const corsOptions = {
+  origin: 'https://srm-gamma.vercel.app',
+  credentials: true,
+};
+
+app.use(cors(corsOptions));
 app.use(express.json());
 
-app.use('/', authRoutes);
-app.use('/', scoreRoutes);
+// Database connection
+const db = mysql.createConnection({
+  host: process.env.DB_HOST,
+  user: process.env.DB_USER,
+  password: process.env.DB_PASSWORD,
+  database: process.env.DB_NAME,
+});
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
+db.connect((err) => {
+  if (err) return console.error('DB error:', err);
+  console.log('MySQL connected');
+});
+
+// Example signup route
+app.post('/signup', (req, res) => {
+  const { email, password } = req.body;
+  db.query('INSERT INTO users (email, password) VALUES (?, ?)', [email, password], (err) => {
+    if (err) return res.status(500).json({ message: 'Error' });
+    res.json({ message: 'Signup success' });
+  });
+});
+
+// Start server
+app.listen(port, () => {
+  console.log(`Server running on port ${port}`);
+});
