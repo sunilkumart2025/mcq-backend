@@ -1,91 +1,76 @@
-// server.js
 const express = require('express');
 const cors = require('cors');
+const mysql = require('mysql2');
+const bodyParser = require('body-parser');
 const dotenv = require('dotenv');
-const axios = require('axios');
-
 dotenv.config();
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// ✅ CORS FIX — very important!
+// ✅ Allow only your frontend domain
 app.use(cors({
   origin: 'https://srm-gamma.vercel.app',
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
-  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE'],
+  credentials: true
 }));
 
-app.options('*', cors()); // Preflight request handling
+app.use(bodyParser.json());
 
-app.use(express.json());
+// ✅ MySQL (or Supabase SQL connection settings)
+const db = mysql.createConnection({
+  host: process.env.DB_HOST,       // e.g., 'db.supabase.com'
+  user: process.env.DB_USER,       // your username
+  password: process.env.DB_PASS,   // your password
+  database: process.env.DB_NAME    // your database name
+});
 
-// ✅ Supabase config
-const SUPABASE_URL = process.env.SUPABASE_URL;
-const SUPABASE_KEY = process.env.SUPABASE_KEY;
-
-// ✅ Signup
-app.post('/signup', async (req, res) => {
-  const { email, password } = req.body;
-  try {
-    const { data } = await axios.post(`${SUPABASE_URL}/auth/v1/signup`, {
-      email, password
-    }, {
-      headers: {
-        apiKey: SUPABASE_KEY,
-        Authorization: `Bearer ${SUPABASE_KEY}`,
-        'Content-Type': 'application/json'
-      }
-    });
-    res.status(200).json({ message: 'Signup successful', data });
-  } catch (err) {
-    res.status(500).json({ message: 'Signup failed', error: err.message });
+db.connect(err => {
+  if (err) {
+    console.error('Database connection failed:', err);
+  } else {
+    console.log('Connected to database');
   }
 });
 
-// ✅ Login
-app.post('/login', async (req, res) => {
+// ✅ Signup route
+app.post('/signup', (req, res) => {
   const { email, password } = req.body;
-  try {
-    const { data } = await axios.post(`${SUPABASE_URL}/auth/v1/token?grant_type=password`, {
-      email, password
-    }, {
-      headers: {
-        apiKey: SUPABASE_KEY,
-        Authorization: `Bearer ${SUPABASE_KEY}`,
-        'Content-Type': 'application/json'
+  if (!email || !password) return res.status(400).json({ message: 'Missing fields' });
+
+  const query = 'INSERT INTO users (email, password) VALUES (?, ?)';
+  db.query(query, [email, password], (err) => {
+    if (err) {
+      if (err.code === 'ER_DUP_ENTRY') {
+        return res.status(400).json({ message: 'Email already exists' });
       }
-    });
-    res.status(200).json({ message: 'Login successful', data });
-  } catch (err) {
-    res.status(500).json({ message: 'Login failed', error: err.message });
-  }
+      return res.status(500).json({ message: 'Signup failed' });
+    }
+    res.json({ message: 'Signup successful', data: true });
+  });
 });
 
-// ✅ Forgot Password
-app.post('/forgot-password', async (req, res) => {
+// ✅ Login route
+app.post('/login', (req, res) => {
+  const { email, password } = req.body;
+  const query = 'SELECT * FROM users WHERE email = ? AND password = ?';
+  db.query(query, [email, password], (err, results) => {
+    if (err || results.length === 0) {
+      return res.status(401).json({ message: 'Invalid credentials' });
+    }
+    res.json({ message: 'Login successful', data: true });
+  });
+});
+
+// ✅ Forgot password route (basic simulation)
+app.post('/forgot-password', (req, res) => {
   const { email } = req.body;
-  try {
-    const { data } = await axios.post(`${SUPABASE_URL}/auth/v1/recover`, {
-      email
-    }, {
-      headers: {
-        apiKey: SUPABASE_KEY,
-        Authorization: `Bearer ${SUPABASE_KEY}`,
-        'Content-Type': 'application/json'
-      }
-    });
-    res.status(200).json({ message: 'Reset email sent', data });
-  } catch (err) {
-    res.status(500).json({ message: 'Reset failed', error: err.message });
-  }
-});
+  if (!email) return res.status(400).json({ message: 'Email required' });
 
-// ✅ Test route
-app.get('/', (req, res) => {
-  res.send('Backend running fine.');
+  // TODO: Send an email with reset link (use nodemailer later)
+  res.json({ message: 'Reset email sent (simulated)', data: true });
 });
 
 app.listen(PORT, () => {
-  console.log(`Server running on http://localhost:${PORT}`);
+  console.log(`Server running on port ${PORT}`);
 });
